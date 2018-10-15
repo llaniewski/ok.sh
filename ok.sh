@@ -1168,6 +1168,43 @@ list_repos() {
     _get "${url}${qs}" | _filter_json "${_filter}"
 }
 
+list_org_repos() {
+    # List organization repositories
+    #
+    # Usage:
+    #
+    #     list_org_repos user
+    #
+    # Positional arguments
+    #
+    local org="${1:?Organization required}"
+    #   GitHub organization id for which to list repos.
+    #
+    # Keyword arguments
+    #
+    local _filter='.[] | "\(.name)\t\(.html_url)"'
+    #   A jq filter to apply to the return data.
+    #
+    # Querystring arguments may also be passed as keyword arguments:
+    #
+    # * `direction`
+    # * `per_page`
+    # * `sort`
+    # * `type`
+
+
+    shift 1
+    local qs
+
+    _opts_filter "$@"
+    _opts_qs "$@"
+
+    url="/orgs/${org}/repos"
+
+    _get "${url}${qs}" | _filter_json "${_filter}"
+}
+
+
 list_branches() {
     # List branches of a specified repository.
     # ( https://developer.github.com/v3/repos/#list_branches )
@@ -1791,6 +1828,46 @@ add_commit_comment() {
         | _post "/repos/${repository}/commits/${hash}/comments" \
         | _filter_json "${_filter}"
 }
+
+add_commit_status() {
+    # Add status to a commit
+    #
+    # Usage:
+    #   add_commit_status someuser/somerepo 123 success ['http://.../' 'This is a comment']
+    #
+    # Positional arguments
+    #
+    local repository="${1:?Repo name required}"
+    #   A GitHub repository
+    local hash="${2:?Commit hash required}"
+    #   Commit hash
+    local status="${3:?Status required}"
+    #   Status: error, failure, pending, success
+    local target_url="$4"
+    #   URL to be added
+    local description="$5"
+    #   Comment to be added
+    #
+    # Keyword arguments
+    #
+    local _filter='"\(.id)\t\(.html_url)"'
+    #   A jq filter to apply to the return data.
+
+    shift 3
+    _opts_filter "$@"
+
+    case "$status" in
+        error|failure|pending|success) ;;
+        *)
+            printf 'status have to be: error, failure, pending or success\n' 1>&2
+            exit 1
+    esac
+
+    _format_json state="$status" target_url="$target_url" description="$description"  \
+        | _post "/repos/${repository}/statuses/${hash}" \
+        | _filter_json "${_filter}"
+}
+
 
 close_issue() {
     # Close an issue
