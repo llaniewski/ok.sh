@@ -1853,7 +1853,7 @@ add_commit_status() {
     local _filter='"\(.id)\t\(.html_url)"'
     #   A jq filter to apply to the return data.
 
-    shift 3
+    shift 5
     _opts_filter "$@"
 
     case "$status" in
@@ -1866,6 +1866,30 @@ add_commit_status() {
     _format_json state="$status" target_url="$target_url" description="$description"  \
         | _post "/repos/${repository}/statuses/${hash}" \
         | _filter_json "${_filter}"
+}
+
+get_commit_status() {
+    # Add status to a commit
+    #
+    # Usage:
+    #   add_commit_status someuser/somerepo 123 success ['http://.../' 'This is a comment']
+    #
+    # Positional arguments
+    #
+    local repository="${1:?Repo name required}"
+    #   A GitHub repository
+    local hash="${2:?Commit hash required}"
+    #   Commit hash
+    #
+    # Keyword arguments
+    #
+    local _filter='.[] | "\(.id)\t\(.state)\t\(.target_url)\t\(.creator.login)"'
+    #   A jq filter to apply to the return data.
+
+    shift 2
+    _opts_filter "$@"
+
+    _get "/repos/${repository}/statuses/${hash}" | _filter_json "${_filter}"
 }
 
 
