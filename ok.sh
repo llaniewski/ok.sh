@@ -1204,6 +1204,45 @@ list_org_repos() {
     _get "${url}${qs}" | _filter_json "${_filter}"
 }
 
+list_forks() {
+    # List repository forks
+    #
+    # Usage:
+    #
+    #     list_forks
+    #     list_forks user repo
+    #
+    # Positional arguments
+    #
+    local user="${1:?User required}"
+    #   GitHub user login for which to list forks.
+    local repo="${2:?User required}"
+    #   Repository name for which to list forks.
+    #
+    # Keyword arguments
+    #
+    local _filter='.[] | "\(.name)\t\(.html_url)"'
+    #   A jq filter to apply to the return data.
+    #
+    # Querystring arguments may also be passed as keyword arguments:
+    #
+    # * `direction`
+    # * `per_page`
+    # * `sort`
+    # * `type`
+
+
+    shift 2
+    local qs
+
+    _opts_filter "$@"
+    _opts_qs "$@"
+
+    url="/repos/${user}/${repo}/forks"
+
+    _get "${url}${qs}" | _filter_json "${_filter}"
+}
+
 
 list_branches() {
     # List branches of a specified repository.
@@ -1843,9 +1882,9 @@ add_commit_status() {
     #   Commit hash
     local status="${3:?Status required}"
     #   Status: error, failure, pending, success
-    local target_url="$4"
+    local target_url="${4:?URL required}"
     #   URL to be added
-    local description="$5"
+    local description="${5:?Description required}"
     #   Comment to be added
     #
     # Keyword arguments
