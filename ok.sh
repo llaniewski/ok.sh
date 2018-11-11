@@ -1204,6 +1204,41 @@ list_org_repos() {
     _get "${url}${qs}" | _filter_json "${_filter}"
 }
 
+show_user() {
+    # Show user details
+    #
+    # Usage:
+    #
+    #     show_user user
+    #
+    # Positional arguments
+    #
+    local user="${1:?User required}"
+    #   GitHub user id
+    #
+    # Keyword arguments
+    #
+    local _filter='.name'
+    #   A jq filter to apply to the return data.
+    #
+    # Querystring arguments may also be passed as keyword arguments:
+    #
+    # * `direction`
+    # * `per_page`
+    # * `sort`
+    # * `type`
+
+    shift 1
+    local qs
+
+    _opts_filter "$@"
+    _opts_qs "$@"
+
+    url="/users/${user}"
+
+    _get "${url}${qs}" | _filter_json "${_filter}"
+}
+
 list_forks() {
     # List repository forks
     #
