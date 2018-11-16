@@ -413,6 +413,7 @@ _format_json() {
                 sub(/('\''|")$/, "", val)
 
                 gsub(/"/, "\\\"", val)  # Escape double-quotes.
+                gsub(/\t/, "\\t", val)  # Escape tab.
                 gsub(/\n/, "\\n", val)  # Replace newlines with \n text.
                 val = "\"" val "\""
             }
