@@ -31,6 +31,8 @@
 #         login <username>
 #         password <token>
 #
+# Or set an environment `GITHUB_TOKEN=token`
+#
 # ## Configuration
 #
 # The following environment variables may be set to customize ${NAME}.
@@ -51,7 +53,7 @@
 #   Output some text in Markdown format.
 
 export NAME=$(basename "$0")
-export VERSION='0.1.0'
+export VERSION='0.5.1'
 
 export OK_SH_URL=${OK_SH_URL:-'https://api.github.com'}
 export OK_SH_ACCEPT=${OK_SH_ACCEPT:-'application/vnd.github.v3+json'}
@@ -73,12 +75,9 @@ export LINFO=4      # Info-level log messages.
 export LDEBUG=5     # Debug-level log messages.
 export LSUMMARY=6   # Summary output.
 
-# We need this path for when we reset our env.
-awk_bin=$(command -v awk)
-
 # Generate a carriage return so we can match on it.
 # Using a variable because these are tough to specify in a portable way.
-cr=$(printf '\r')
+crlf=$(printf '\r\n')
 
 # ## Main
 # Generic functions not necessarily specific to working with GitHub.
@@ -86,7 +85,22 @@ cr=$(printf '\r')
 # ### Help
 # Functions for fetching and formatting help text.
 
- _cols() { sort | pr -t -3; }
+ _cols() {
+    sort | awk '
+        { w[NR] = $0 }
+        END {
+            cols = 3
+            per_col = sprintf("%.f", NR / cols + 0.5)  # Round up if decimal.
+
+            for (i = 1; i < per_col + 1; i += 1) {
+                for (j = 0; j < cols; j += 1) {
+                    printf("%-24s", w[i + per_col * j])
+                }
+                printf("\n")
+            }
+        }
+    '
+ }
  _links() { awk '{ print "* [" $0 "](#" $0 ")" }'; }
  _funcsfmt() { if [ "$OK_SH_MARKDOWN" -eq 0 ]; then _cols; else _links; fi; }
 
@@ -104,7 +118,7 @@ help() {
 
     # Short-circuit if only producing help for a single function.
     if [ $# -gt 0 ]; then
-        awk -v fname="^$fname\\\(\\\) {$" '$0 ~ fname, /^}/ { print }' "$0" \
+        awk -v fname="^$fname\\\(\\\) \\\{$" '$0 ~ fname, /^}/ { print }' "$0" \
             | _helptext
         return
     fi
@@ -166,11 +180,11 @@ __main() {
     #
     # `${NAME} [<flags>] (command [<arg>, <name=value>...])`
     #
-    #       ${NAME} -h              # Short, usage help text.
-    #       ${NAME} help            # All help text. Warning: long!
-    #       ${NAME} help command    # Command-specific help text.
-    #       ${NAME} command         # Run a command with and without args.
-    #       ${NAME} command foo bar baz=Baz qux='Qux arg here'
+    #     ${NAME} -h              # Short, usage help text.
+    #     ${NAME} help            # All help text. Warning: long!
+    #     ${NAME} help command    # Command-specific help text.
+    #     ${NAME} command         # Run a command with and without args.
+    #     ${NAME} command foo bar baz=Baz qux='Qux arg here'
     #
     # Flag | Description
     # ---- | -----------
@@ -315,8 +329,7 @@ _helptext() {
     }
     /^\s*local/ {
         sub(/^\s*local /, "")
-        # sub(/"{0,1}\${/, "$", $0)
-        sub(/\${/, "$", $0)
+        sub(/\$\{/, "$", $0)
         sub(/:.*}/, "", $0)
         print "* `" $0 "`\n"
     }
@@ -326,47 +339,25 @@ _helptext() {
 # ### Request-response
 # Functions for making HTTP requests and processing HTTP responses.
 
-_awk_map() {
-    # Invoke awk with a function that will empty the ENVIRON map
-    #
-    # Positional arguments
-    #
-    local prg="${1:?awk program string required}"
-    # The body of an awk program to run
-
-    shift 1
-
-    local env_bin=$(command -v env)
-    local env_blacklist=$(env -i "$env_bin" | while read -r env_var; do
-        printf '%s\n' "${env_var%=*}"
-    done)
-
-    env -i "$@" "$awk_bin" \
-        -v env_blacklist="${env_blacklist}" \
-        '
-        function clear_envrion() {
-            for (name in ENVIRON) {
-                if (substr(name, 0, 3) == "AWK") delete ENVIRON[name]
-            }
-
-            split(env_blacklist, bl, "\n")
-            for (name in bl) { delete ENVIRON[bl[name]] }
-        }
-        '"$prg"
-}
-
 _format_json() {
     # Create formatted JSON from name=value pairs
     #
     # Usage:
     # ```
-    # _format_json foo=Foo bar=123 baz=true qux=Qux=Qux quux='Multi-line
-    # string' quuz=\'5.20170918\' corge=$(ok.sh _format_json grault=Grault)
+    # ok.sh _format_json foo=Foo bar=123 baz=true qux=Qux=Qux quux='Multi-line
+    # string' quuz=\'5.20170918\' \
+    #   corge="$(ok.sh _format_json grault=Grault)" \
+    #   garply="$(ok.sh _format_json -a waldo true 3)"
     # ```
     #
     # Return:
     # ```
     # {
+    #   "garply": [
+    #     "waldo",
+    #     true,
+    #     3
+    #   ],
     #   "foo": "Foo",
     #   "corge": {
     #     "grault": "Grault"
@@ -374,12 +365,18 @@ _format_json() {
     #   "baz": true,
     #   "qux": "Qux=Qux",
     #   "quux": "Multi-line\nstring",
-    #   "bar": 123,
-    #   "quuz": "5.20170918"
+    #   "quuz": "5.20170918",
+    #   "bar": 123
     # }
     # ```
     #
     # Tries not to quote numbers, booleans, nulls, or nested structures.
+    # Note, nested structures must be quoted since the output contains spaces.
+    #
+    # The `-a` option will create an array instead of an object. This option
+    # must come directly after the _format_json command and before any
+    # operands. E.g., `_format_json -a foo bar baz`.
+    #
     # If jq is installed it will also validate the output.
     #
     # Positional arguments
@@ -389,44 +386,59 @@ _format_json() {
     #   Each positional arg must be in the format of `name=value` which will be
     #   added to a single, flat JSON object.
 
+    local opt
+    local OPTIND
+    local is_array=0
+    local use_env=1
+    while getopts a opt; do
+        case $opt in
+        a)  is_array=1; unset use_env;;
+        esac
+    done
+    shift $(( OPTIND - 1 ))
+
     _log debug "Formatting ${#} parameters as JSON."
 
-    _awk_map '
+    env -i -- ${use_env+"$@"} awk -v is_array="$is_array" '
     function isnum(x){ return (x == x + 0) }
     function isnull(x){ return (x == "null" ) }
     function isbool(x){ if (x == "true" || x == "false") return 1 }
     function isnested(x) { if (substr(x, 0, 1) == "[" \
         || substr(x, 0, 1) == "{") return 1 }
+    function castOrQuote(val) {
+        if (!isbool(val) && !isnum(val) && !isnull(val) && !isnested(val)) {
+            sub(/^('\''|")/, "", val) # Remove surrounding quotes
+            sub(/('\''|")$/, "", val)
+
+            gsub(/"/, "\\\"", val)  # Escape double-quotes.
+            gsub(/\n/, "\\n", val)  # Replace newlines with \n text.
+            val = "\"" val "\""
+            return val
+        } else {
+            return val
+        }
+    }
 
     BEGIN {
+        printf("%s", is_array ? "[" : "{")
 
-        clear_envrion()
+        for (i = 1; i < length(ARGV); i += 1) {
+            arg = ARGV[i]
 
-        printf("{")
-
-        for (name in ENVIRON) {
-            val = ENVIRON[name]
-
-            # If not castable, then quote it.
-            if (!isbool(val) && !isnum(val) && !isnull(val) && !isnested(val)) {
-                sub(/^('\''|")/, "", val) # Remove surrounding quotes
-                sub(/('\''|")$/, "", val)
-
-                gsub(/"/, "\\\"", val)  # Escape double-quotes.
-                gsub(/\t/, "\\t", val)  # Escape tab.
-                gsub(/\n/, "\\n", val)  # Replace newlines with \n text.
-                gsub(/\r/, "", val)     # Replace newlines with \n text.
-                gsub(/[[:cntrl:]]/, "?", val)  # Replace newlines with \n text.
-                val = "\"" val "\""
+            if (is_array == 1) {
+                val = castOrQuote(arg)
+                printf("%s%s", sep, val)
+            } else {
+                name = substr(arg, 0, index(arg, "=") - 1)
+                val = castOrQuote(ENVIRON[name])
+                printf("%s\"%s\": %s", sep, name, val)
             }
 
-            printf("%s\"%s\": %s", sep, name, val)
             sep = ", "
+            ARGV[i] = ""
         }
-
-        printf("}\n")
-    }
-    ' "$@" | _filter_json
+        printf("%s", is_array ? "]" : "}")
+    }' "$@"
 }
 
 _format_urlencode() {
@@ -446,8 +458,8 @@ _format_urlencode() {
 
     _log debug "Formatting ${#} parameters as urlencoded"
 
-    _awk_map '
-    function escape(str, c, len, res) {
+    env -i -- "$@" awk '
+    function escape(str, c, i, len, res) {
         len = length(str)
         res = ""
         for (i = 1; i <= len; i += 1) {
@@ -461,19 +473,19 @@ _format_urlencode() {
     }
 
     BEGIN {
-        clear_envrion()
-
         for (i = 0; i <= 255; i += 1) ord[sprintf("%c", i)] = i;
 
-        for (name in ENVIRON) {
+        for (j = 1; j < length(ARGV); j += 1) {
+            arg = ARGV[j]
+            name = substr(arg, 0, index(arg, "=") - 1)
             if (substr(name, 1, 1) == "_") continue
             val = ENVIRON[name]
 
             printf("%s%s=%s", sep, name, escape(val))
             sep = "&"
+            ARGV[j] = ""
         }
-    }
-    ' "$@"
+    }' "$@"
 }
 
 _filter_json() {
@@ -532,6 +544,7 @@ _get_mime_type() {
         *.tar) mime_type=application/x-tar ;;
         *.txt) mime_type=text/plain ;;
         *.yaml) mime_type=application/x-yaml ;;
+        *.apk) mime_type=application/vnd.android.package-archive ;;
         *.zip) mime_type=application/zip ;;
     esac
 
@@ -575,8 +588,8 @@ _opts_filter() {
     #
     # Usage:
     #
-    #       local filter
-    #       _opts_filter "$@"
+    #     local filter
+    #     _opts_filter "$@"
 
     for arg in "$@"; do
         case $arg in
@@ -590,8 +603,8 @@ _opts_pagination() {
     #
     # Usage:
     #
-    #       local _follow_next
-    #       _opts_pagination "$@"
+    #     local _follow_next
+    #     _opts_pagination "$@"
 
     for arg in "$@"; do
         case $arg in
@@ -606,9 +619,9 @@ _opts_qs() {
     #
     # Usage:
     #
-    #       local qs
-    #       _opts_qs "$@"
-    #       _get "/some/path${qs}"
+    #     local qs
+    #     _opts_qs "$@"
+    #     _get "/some/path${qs}"
 
     local querystring=$(_format_urlencode "$@")
     qs="${querystring:+?$querystring}"
@@ -687,6 +700,7 @@ _request() {
     curl -nsSig \
         -H "Accept: ${OK_SH_ACCEPT}" \
         -H "Content-Type: ${content_type}" \
+        ${GITHUB_TOKEN:+-H "Authorization: token ${GITHUB_TOKEN}"} \
         ${etag:+-H "If-None-Match: \"${etag}\""} \
         ${has_stdin:+--data-binary @-} \
         ${trace_curl:+--trace-ascii /dev/stderr} \
@@ -750,7 +764,7 @@ _response() {
     _log debug 'Processing response.'
 
     read -r http_version status_code status_text
-    status_text="${status_text%${cr}}"
+    status_text="${status_text%${crlf}}"
     http_version="${http_version#HTTP/}"
 
     _log debug "Response status is: ${status_code} ${status_text}"
@@ -761,8 +775,8 @@ status_text: ${status_text}
 "
     while IFS=": " read -r hdr val; do
         # Headers stop at the first blank line.
-        [ "$hdr" = "$cr" ] && break
-        val="${val%${cr}}"
+        [ "$hdr" = "$crlf" ] && break
+        val="${val%${crlf}}"
 
         # Process each header; reformat some to work better with sh tools.
         case "$hdr" in
@@ -783,7 +797,7 @@ status_text: ${status_text}
                 BEGIN { RS=", "; FS="; "; OFS=": " }
                 {
                     sub(/^rel="/, "", $2); sub(/"$/, "", $2)
-                    sub(/^[[:space:]]*</, "", $1); sub(/>$/, "", $1)
+                    sub(/^ *</, "", $1); sub(/>$/, "", $1)
                     print "Link_" $2, $1
                 }')
 "  # need trailing newline
@@ -882,7 +896,7 @@ _get() {
 }
 
 _post() {
-    # A wrapper around _request() for commoon POST / PUT patterns
+    # A wrapper around _request() for common POST / PUT patterns
     #
     # Usage:
     #
@@ -1398,11 +1412,126 @@ list_collaborators() {
     _get "${url}${qs}" | _filter_json "${_filter}"
 }
 
+list_hooks() {
+    # List webhooks from the specified repository.
+    # ( https://developer.github.com/v3/repos/hooks/#list-hooks )
+    #
+    # Usage:
+    #
+    #     list_hooks owner/repo
+    #
+    # Positional arguments
+    #
+    local repo="${1:?Repo name required.}"
+    #   Name of the repo for which to list contributors
+    #   Owner is mandatory, like 'owner/repo'
+    #
+    local _filter='.[] | "\(.name)\t\(.config.url)"'
+    #   A jq filter to apply to the return data.
+    #
+
+    shift 1
+
+    _opts_filter "$@"
+
+    url="/repos/${repo}/hooks"
+
+    _get "${url}" | _filter_json "${_filter}"
+}
+
+list_gists() {
+    # List gists for the current authenticated user or a specific user
+    #
+    # https://developer.github.com/v3/gists/#list-a-users-gists
+    #
+    # Usage:
+    #
+    #     list_gists
+    #     list_gists <username>
+    #
+    # Positional arguments
+    #
+    local username="$1"
+    #   An optional user to filter listing
+    #
+    # Keyword arguments
+    #
+    local _follow_next
+    #   Automatically look for a 'Links' header and follow any 'next' URLs.
+    local _follow_next_limit
+    #   Maximum number of 'next' URLs to follow before stopping.
+    local _filter='.[] | "\(.id)\t\(.description)"'
+    #   A jq filter to apply to the return data.
+
+    local url
+    case "$username" in
+        ('') url='/gists';;
+        (*=*) url='/gists';;
+        (*) url="/users/${username}/gists"; shift 1;;
+    esac
+
+    _opts_pagination "$@"
+    _opts_filter "$@"
+
+    _get "${url}" | _filter_json "${_filter}"
+}
+
+public_gists() {
+    # List public gists
+    #
+    # https://developer.github.com/v3/gists/#list-all-public-gists
+    #
+    # Usage:
+    #
+    #     public_gists
+    #
+    # Keyword arguments
+    #
+    local _follow_next
+    #   Automatically look for a 'Links' header and follow any 'next' URLs.
+    local _follow_next_limit
+    #   Maximum number of 'next' URLs to follow before stopping.
+    local _filter='.[] | "\(.id)\t\(.description)"'
+    #   A jq filter to apply to the return data.
+
+    _opts_pagination "$@"
+    _opts_filter "$@"
+
+    _get '/gists/public' | _filter_json "${_filter}"
+}
+
+gist() {
+    # Get a single gist
+    #
+    # https://developer.github.com/v3/gists/#get-a-single-gist
+    #
+    # Usage:
+    #
+    #     get_gist
+    #
+    # Positional arguments
+    #
+    local gist_id="${1:?Gist ID required.}"
+    #   ID of gist to fetch.
+    #
+    # Keyword arguments
+    #
+    local _filter='.files | keys | join(", ")'
+    #   A jq filter to apply to the return data.
+
+    shift 1
+
+    _opts_filter "$@"
+
+    _get "/gists/${gist_id}" | _filter_json "${_filter}"
+}
+
 add_collaborator() {
     # Add a collaborator to a repository
     #
     # Usage:
-    #       add_collaborator someuser/somerepo collaboratoruser permission
+    #
+    #     add_collaborator someuser/somerepo collaboratoruser permission
     #
     # Positional arguments
     #
@@ -1436,7 +1565,8 @@ delete_collaborator() {
     # Delete a collaborator to a repository
     #
     # Usage:
-    #       delete_collaborator someuser/somerepo collaboratoruser permission
+    #
+    #     delete_collaborator someuser/somerepo collaboratoruser permission
     #
     # Positional arguments
     #
@@ -1511,7 +1641,7 @@ create_repo() {
 }
 
 delete_repo() {
-    # Create a repository for a user or organization
+    # Delete a repository for a user or organization
     #
     # Usage:
     #
@@ -1539,7 +1669,7 @@ delete_repo() {
 }
 
 fork_repo() {
-    # Fork a repository from a user or organization to own account
+    # Fork a repository from a user or organization to own account or organization
     #
     # Usage:
     #
@@ -1552,16 +1682,21 @@ fork_repo() {
     local repo="${2:?Repo name required.}"
     #   Name of the existing repo
     #
+    #
     # Keyword arguments
     #
     local _filter='"\(.clone_url)\t\(.ssh_url)"'
     #   A jq filter to apply to the return data.
+    #
+    # POST data may also be passed as keyword arguments:
+    # 
+    # * `organization` (The organization to clone into; default: your personal account)
 
     shift 2
 
     _opts_filter "$@"
 
-    _format_json foo=Foo | _post "/repos/${owner}/${repo}/forks" \
+    _format_json "$@" | _post "/repos/${owner}/${repo}/forks" \
         | _filter_json "${_filter}"
     exit $?  # might take a bit time...
 }
@@ -1571,6 +1706,8 @@ fork_repo() {
 
 list_releases() {
     # List releases for a repository
+    #
+    # https://developer.github.com/v3/repos/releases/#list-releases-for-a-repository
     #
     # Usage:
     #
@@ -1585,7 +1722,7 @@ list_releases() {
     #
     # Keyword arguments
     #
-    local _filter='.[] | "\(.name)\t\(.id)\t\(.html_url)"'
+    local _filter='.[] | "\(.name)\t\(.tag_name)\t\(.id)\t\(.html_url)"'
     #   A jq filter to apply to the return data.
 
     shift 2
@@ -1598,6 +1735,8 @@ list_releases() {
 
 release() {
     # Get a release
+    #
+    # https://developer.github.com/v3/repos/releases/#get-a-single-release
     #
     # Usage:
     #
@@ -1627,6 +1766,8 @@ release() {
 
 create_release() {
     # Create a release
+    #
+    # https://developer.github.com/v3/repos/releases/#create-a-release
     #
     # Usage:
     #
@@ -1667,6 +1808,8 @@ create_release() {
 delete_release() {
     # Delete a release
     #
+    # https://developer.github.com/v3/repos/releases/#delete-a-release
+    #
     # Usage:
     #
     #     delete_release org repo 1087855
@@ -1696,9 +1839,30 @@ delete_release() {
 release_assets() {
     # List release assets
     #
+    # https://developer.github.com/v3/repos/releases/#list-assets-for-a-release
+    #
     # Usage:
     #
     #     release_assets user repo 1087855
+    #
+    # Example of downloading release assets:
+    #
+    #     ok.sh release_assets <user> <repo> <release_id> \
+    #             _filter='.[] | .browser_download_url' \
+    #         | xargs -L1 curl -L -O
+    #
+    # Example of the multi-step process for grabbing the release ID for
+    # a specific version, then grabbing the release asset IDs, and then
+    # downloading all the release assets (whew!):
+    #
+    #     username='myuser'
+    #     repo='myrepo'
+    #     release_tag='v1.2.3'
+    #     ok.sh list_releases "$myuser" "$myrepo" \
+    #         | awk -F'\t' -v tag="$release_tag" '$2 == tag { print $3 }' \
+    #         | xargs -I{} ./ok.sh release_assets "$myuser" "$myrepo" {} \
+    #             _filter='.[] | .browser_download_url' \
+    #         | xargs -L1 curl -n -L -O
     #
     # Positional arguments
     #
@@ -1725,47 +1889,56 @@ release_assets() {
 upload_asset() {
     # Upload a release asset
     #
-    # Note, this command requires `jq` to find the release `upload_url`.
+    # https://developer.github.com/v3/repos/releases/#upload-a-release-asset
     #
     # Usage:
     #
-    #     upload_asset username reponame 1087938 \
-    #         foo.tar application/x-tar < foo.tar
+    #     upload_asset https://<upload-url> /path/to/file.zip
     #
-    # * (stdin)
-    #   The contents of the file to upload.
+    # The upload URL can be gotten from `release()`. There are multiple steps
+    # required to upload a file: get the release ID, get the upload URL, parse
+    # the upload URL, then finally upload the file. For example:
+    #
+    # ```sh
+    # USER="someuser"
+    # REPO="somerepo"
+    # TAG="1.2.3"
+    # FILE_NAME="foo.zip"
+    # FILE_PATH="/path/to/foo.zip"
+    #
+    # # Create a release then upload a file:
+    # ok.sh create_release "$USER" "$REPO" "$TAG" _filter='.upload_url' \
+    #     | sed 's/{.*$/?name='"$FILE_NAME"'/' \
+    #     | xargs -I@ ok.sh upload_asset @ "$FILE_PATH"
+    #
+    # # Find a release by tag then upload a file:
+    # ok.sh list_releases "$USER" "$REPO" \
+    #     | awk -v "tag=$TAG" -F'\t' '$2 == tag { print $3 }' \
+    #     | xargs -I@ ok.sh release "$USER" "$REPO" @ _filter='.upload_url' \
+    #     | sed 's/{.*$/?name='"$FILE_NAME"'/' \
+    #     | xargs -I@ ok.sh upload_asset @ "$FILE_PATH"
+    # ```
     #
     # Positional arguments
     #
-    local owner="${1:?Owner name required.}"
-    #   A GitHub user or organization.
-    local repo="${2:?Repo name required.}"
-    #   A GitHub repository.
-    local release_id="${3:?Release ID required.}"
-    #   The unique ID of the release; see list_releases.
-    local name="${4:?File name is required.}"
-    #   The file name of the asset.
+    local upload_url="${1:?upload_url is required.}"
+    # The _parsed_ upload_url returned from GitHub.
+    #
+    local file_path="${2:?file_path is required.}"
+    #   A path to the file that should be uploaded.
     #
     # Keyword arguments
     #
     local _filter='"\(.state)\t\(.browser_download_url)"'
     #   A jq filter to apply to the return data.
+    #
+    # Also any other keyword arguments accepted by `_post()`.
 
-    shift 4
-
-    if [ $NO_JQ -ne 0 ] ; then
-        printf 'upload_asset requires jq\n' 1>&2
-        exit 1
-    fi
+    shift 2
 
     _opts_filter "$@"
 
-    local upload_url=$(release "$owner" "$repo" "$release_id" _filter="(.upload_url)" \
-        | sed -e 's/{?name,label}/?name='"$name"'/g')
-
-    : "${upload_url:?Upload URL could not be retrieved.}"
-
-    _post "$upload_url" filename="$name" \
+    _post "$upload_url" filename="$file_path" "$@" \
         | _filter_json "$_filter"
 }
 
@@ -1777,8 +1950,8 @@ list_milestones() {
     #
     # Usage:
     #
-    #       list_milestones someuser/somerepo
-    #       list_milestones someuser/somerepo state=closed
+    #     list_milestones someuser/somerepo
+    #     list_milestones someuser/somerepo state=closed
     #
     # Positional arguments
     #
@@ -1816,12 +1989,12 @@ create_milestone() {
     #
     # Usage:
     #
-    #       create_milestone someuser/somerepo MyMilestone
+    #     create_milestone someuser/somerepo MyMilestone
     #
-    #       create_milestone someuser/somerepo MyMilestone \
-    #           due_on=2015-06-16T16:54:00Z \
-    #           description='Long description here
-    #       that spans multiple lines.'
+    #     create_milestone someuser/somerepo MyMilestone \
+    #         due_on=2015-06-16T16:54:00Z \
+    #         description='Long description here
+    #     that spans multiple lines.'
     #
     # Positional arguments
     #
@@ -1854,7 +2027,8 @@ add_comment() {
     # Add a comment to an issue
     #
     # Usage:
-    #   add_comment someuser/somerepo 123 'This is a comment'
+    #
+    #     add_comment someuser/somerepo 123 'This is a comment'
     #
     # Positional arguments
     #
@@ -1882,7 +2056,8 @@ add_commit_comment() {
     # Add a comment to a commit
     #
     # Usage:
-    #   add_commit_comment someuser/somerepo 123 'This is a comment'
+    #
+    #     add_commit_comment someuser/somerepo 123 'This is a comment'
     #
     # Positional arguments
     #
@@ -1974,7 +2149,8 @@ close_issue() {
     # Close an issue
     #
     # Usage:
-    #   close_issue someuser/somerepo 123
+    #
+    #     close_issue someuser/somerepo 123
     #
     # Positional arguments
     #
@@ -2007,9 +2183,9 @@ list_issues() {
     #
     # Usage:
     #
-    #       list_issues
-    #       list_issues someuser/somerepo
-    #       list_issues <any of the above> state=closed labels=foo,bar
+    #     list_issues
+    #     list_issues someuser/somerepo
+    #     list_issues <any of the above> state=closed labels=foo,bar
     #
     # Positional arguments
     #
@@ -2058,8 +2234,8 @@ user_issues() {
     #
     # Usage:
     #
-    #       user_issues
-    #       user_issues since=2015-60-11T00:09:00Z
+    #     user_issues
+    #     user_issues since=2015-60-11T00:09:00Z
     #
     # Keyword arguments
     #
@@ -2089,12 +2265,51 @@ user_issues() {
     _get "/issues${qs}" | _filter_json "$_filter"
 }
 
+create_issue() {
+    # Create an issue
+    #
+    # Usage:
+    #
+    #     create_issue owner repo 'Issue title' body='Add multiline body
+    #     content here' labels="$(./ok.sh _format_json -a foo bar)"
+    #
+    # Positional arguments
+    #
+    local owner="${1:?Owner name required.}"
+    #   A GitHub repository.
+    local repo="${2:?Repo name required.}"
+    #   A GitHub repository.
+    local title="${3:?Issue title required.}"
+    #   A GitHub repository.
+    #
+    # Keyword arguments
+    #
+    local _filter='"\(.id)\t\(.number)\t\(.html_url)"'
+    #   A jq filter to apply to the return data.
+    #
+    # Additional issue fields may be passed as keyword arguments:
+    #
+    # * `body` (string)
+    # * `assignee` (string)
+    # * `milestone` (integer)
+    # * `labels` (array of strings)
+    # * `assignees` (array of strings)
+
+    shift 3
+
+    _opts_filter "$@"
+
+    _format_json title="$title" "$@" \
+        | _post "/repos/${owner}/${repo}/issues" \
+        | _filter_json "$_filter"
+}
+
 org_issues() {
     # List all issues for a given organization for the authenticated user
     #
     # Usage:
     #
-    #       org_issues someorg
+    #     org_issues someorg
     #
     # Positional arguments
     #
@@ -2130,12 +2345,37 @@ org_issues() {
     _get "/orgs/${org}/issues${qs}" | _filter_json "$_filter"
 }
 
+list_my_orgs() {
+    # List your organizations
+    #
+    # Usage:
+    #
+    #     list_my_orgs
+    #
+    # Keyword arguments
+    #
+    local _follow_next
+    #   Automatically look for a 'Links' header and follow any 'next' URLs.
+    local _follow_next_limit
+    #   Maximum number of 'next' URLs to follow before stopping.
+    local _filter='.[] | "\(.login)\t\(.id)"'
+    #   A jq filter to apply to the return data.
+
+    local qs
+
+    _opts_pagination "$@"
+    _opts_filter "$@"
+    _opts_qs "$@"
+
+    _get "/user/orgs" | _filter_json "$_filter"
+}
+
 list_orgs() {
     # List all organizations
     #
     # Usage:
     #
-    #       list_orgs
+    #     list_orgs
     #
     # Keyword arguments
     #
@@ -2160,7 +2400,7 @@ labels() {
     #
     # Usage:
     #
-    #       labels someuser/somerepo
+    #     labels someuser/somerepo
     #
     # Positional arguments
     #
@@ -2186,7 +2426,8 @@ add_label() {
     # Add a label to a repository
     #
     # Usage:
-    #       add_label someuser/somerepo LabelName color
+    #
+    #     add_label someuser/somerepo LabelName color
     #
     # Positional arguments
     #
@@ -2213,8 +2454,9 @@ update_label() {
     # Update a label
     #
     # Usage:
-    #       update_label someuser/somerepo OldLabelName \
-    #           label=NewLabel color=newcolor
+    #
+    #     update_label someuser/somerepo OldLabelName \
+    #         label=NewLabel color=newcolor
     #
     # Positional arguments
     #
@@ -2273,7 +2515,7 @@ list_pulls() {
     #
     # Usage:
     #
-    #       list_pulls user repo
+    #     list_pulls user repo
     #
     # Positional arguments
     #
@@ -2302,9 +2544,9 @@ create_pull_request() {
     #
     # Usage:
     #
-    #       create_pull_request someuser/somerepo title head base
+    #     create_pull_request someuser/somerepo title head base
     #
-    #       create_pull_request someuser/somerepo title head base body='Description here.'
+    #     create_pull_request someuser/somerepo title head base body='Description here.'
     #
     # Positional arguments
     #
@@ -2341,7 +2583,7 @@ update_pull_request() {
     #
     # Usage:
     #
-    #       update_pull_request someuser/somerepo number title='New title' body='New body'
+    #     update_pull_request someuser/somerepo number title='New title' body='New body'
     #
     # Positional arguments
     #
@@ -2369,6 +2611,67 @@ update_pull_request() {
 
     _format_json "$@" \
         | _post "/repos/${repo}/pulls/${number}" method='PATCH' \
+        | _filter_json "$_filter"
+}
+
+transfer_repo() {
+    # Transfer a repository to a user or organization
+    #
+    # Usage:
+    #
+    #     transfer_repo owner repo new_owner
+    #     transfer_repo owner repo new_owner team_ids='[ 12, 345 ]'
+    #
+    # Positional arguments
+    #
+    local owner="${1:?Owner name required.}"
+    #   Name of the current owner
+    #
+    local repo="${2:?Repo name required.}"
+    #   Name of the current repo
+    #
+    local new_owner="${3:?New owner name required.}"
+    #   Name of the new owner
+    #
+    # Keyword arguments
+    #
+    local _filter='"\(.name)"'
+    #   A jq filter to apply to the return data.
+    #
+    # POST data may also be passed as keyword arguments:
+    #
+    # * `team_ids`
+
+    shift 3
+
+    _opts_filter "$@"
+
+    export OK_SH_ACCEPT='application/vnd.github.nightshade-preview+json'
+    _format_json "new_owner=${new_owner}" "$@" | _post "/repos/${owner}/${repo}/transfer" | _filter_json "${_filter}"
+}
+
+archive_repo() {
+    # Archive a repo
+    #
+    # Usage:
+    #
+    #     archive_repo owner/repo
+    #
+    # Positional arguments
+    #
+    local repo="${1:?Repo name required.}"
+    #   A GitHub repository.
+    #
+    local _filter='"\(.name)\t\(.html_url)"'
+    #   A jq filter to apply to the return data.
+    #
+
+    shift 1
+
+    _opts_filter "$@"
+
+    _format_json "archived=true" \
+        | _post "/repos/${repo}" method='PATCH' \
         | _filter_json "$_filter"
 }
 

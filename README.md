@@ -35,6 +35,8 @@ Restrict permissions on that file with `chmod 600 ~/.netrc`!
         login <username>
         password <token>
 
+Or set an environment `GITHUB_TOKEN=token`
+
 ## Configuration
 
 The following environment variables may be set to customize ok.sh.
@@ -58,11 +60,11 @@ The following environment variables may be set to customize ok.sh.
 
 `ok.sh [<flags>] (command [<arg>, <name=value>...])`
 
-      ok.sh -h              # Short, usage help text.
-      ok.sh help            # All help text. Warning: long!
-      ok.sh help command    # Command-specific help text.
-      ok.sh command         # Run a command with and without args.
-      ok.sh command foo bar baz=Baz qux='Qux arg here'
+    ok.sh -h              # Short, usage help text.
+    ok.sh help            # All help text. Warning: long!
+    ok.sh help command    # Command-specific help text.
+    ok.sh command         # Run a command with and without args.
+    ok.sh command foo bar baz=Baz qux='Qux arg here'
 
 Flag | Description
 ---- | -----------
@@ -84,7 +86,6 @@ Flags _must_ be the first argument to `ok.sh`, before `command`.
 * [_all_funcs](#_all_funcs)
 * [_log](#_log)
 * [_helptext](#_helptext)
-* [_awk_map](#_awk_map)
 * [_format_json](#_format_json)
 * [_format_urlencode](#_format_urlencode)
 * [_filter_json](#_filter_json)
@@ -111,6 +112,10 @@ Flags _must_ be the first argument to `ok.sh`, before `command`.
 * [list_branches](#list_branches)
 * [list_contributors](#list_contributors)
 * [list_collaborators](#list_collaborators)
+* [list_hooks](#list_hooks)
+* [list_gists](#list_gists)
+* [public_gists](#public_gists)
+* [gist](#gist)
 * [add_collaborator](#add_collaborator)
 * [delete_collaborator](#delete_collaborator)
 * [create_repo](#create_repo)
@@ -129,7 +134,9 @@ Flags _must_ be the first argument to `ok.sh`, before `command`.
 * [close_issue](#close_issue)
 * [list_issues](#list_issues)
 * [user_issues](#user_issues)
+* [create_issue](#create_issue)
 * [org_issues](#org_issues)
+* [list_my_orgs](#list_my_orgs)
 * [list_orgs](#list_orgs)
 * [labels](#labels)
 * [add_label](#add_label)
@@ -138,6 +145,8 @@ Flags _must_ be the first argument to `ok.sh`, before `command`.
 * [list_pulls](#list_pulls)
 * [create_pull_request](#create_pull_request)
 * [update_pull_request](#update_pull_request)
+* [transfer_repo](#transfer_repo)
+* [archive_repo](#archive_repo)
 
 ## Commands
 
@@ -187,29 +196,26 @@ Input
 * (stdin)
   The text of a function body to parse.
 
-### _awk_map
-
-Invoke awk with a function that will empty the ENVIRON map
-
-Positional arguments
-
-* `prg="$1"`
-
-The body of an awk program to run
-
 ### _format_json
 
 Create formatted JSON from name=value pairs
 
 Usage:
 ```
-_format_json foo=Foo bar=123 baz=true qux=Qux=Qux quux='Multi-line
-string' quuz=\'5.20170918\' corge=$(ok.sh _format_json grault=Grault)
+ok.sh _format_json foo=Foo bar=123 baz=true qux=Qux=Qux quux='Multi-line
+string' quuz=\'5.20170918\' \
+  corge="$(ok.sh _format_json grault=Grault)" \
+  garply="$(ok.sh _format_json -a waldo true 3)"
 ```
 
 Return:
 ```
 {
+  "garply": [
+    "waldo",
+    true,
+    3
+  ],
   "foo": "Foo",
   "corge": {
     "grault": "Grault"
@@ -217,12 +223,18 @@ Return:
   "baz": true,
   "qux": "Qux=Qux",
   "quux": "Multi-line\nstring",
-  "bar": 123,
-  "quuz": "5.20170918"
+  "quuz": "5.20170918",
+  "bar": 123
 }
 ```
 
 Tries not to quote numbers, booleans, nulls, or nested structures.
+Note, nested structures must be quoted since the output contains spaces.
+
+The `-a` option will create an array instead of an object. This option
+must come directly after the _format_json command and before any
+operands. E.g., `_format_json -a foo bar baz`.
+
 If jq is installed it will also validate the output.
 
 Positional arguments
@@ -308,8 +320,8 @@ Extract common jq filter keyword options and assign to vars
 
 Usage:
 
-      local filter
-      _opts_filter "$@"
+    local filter
+    _opts_filter "$@"
 
 ### _opts_pagination
 
@@ -317,8 +329,8 @@ Extract common pagination keyword options and assign to vars
 
 Usage:
 
-      local _follow_next
-      _opts_pagination "$@"
+    local _follow_next
+    _opts_pagination "$@"
 
 ### _opts_qs
 
@@ -326,9 +338,9 @@ Extract common query string keyword options and assign to vars
 
 Usage:
 
-      local qs
-      _opts_qs "$@"
-      _get "/some/path"
+    local qs
+    _opts_qs "$@"
+    _get "/some/path"
 
 ### _request
 
@@ -453,7 +465,7 @@ Keyword arguments
 
 ### _post
 
-A wrapper around _request() for commoon POST / PUT patterns
+A wrapper around _request() for common POST / PUT patterns
 
 Usage:
 
@@ -745,12 +757,107 @@ Querystring arguments may also be passed as keyword arguments:
 * `sort`
 * `type`
 
+### list_hooks
+
+List webhooks from the specified repository.
+( https://developer.github.com/v3/repos/hooks/#list-hooks )
+
+Usage:
+
+    list_hooks owner/repo
+
+Positional arguments
+
+* `repo="$1"`
+
+  Name of the repo for which to list contributors
+  Owner is mandatory, like 'owner/repo'
+
+* `_filter='.[] | "\(.name)\t\(.config.url)"'`
+
+  A jq filter to apply to the return data.
+
+
+### list_gists
+
+List gists for the current authenticated user or a specific user
+
+https://developer.github.com/v3/gists/#list-a-users-gists
+
+Usage:
+
+    list_gists
+    list_gists <username>
+
+Positional arguments
+
+* `username="$1"`
+
+  An optional user to filter listing
+
+Keyword arguments
+
+* `_follow_next`
+
+  Automatically look for a 'Links' header and follow any 'next' URLs.
+* `_follow_next_limit`
+
+  Maximum number of 'next' URLs to follow before stopping.
+* `_filter='.[] | "\(.id)\t\(.description)"'`
+
+  A jq filter to apply to the return data.
+
+### public_gists
+
+List public gists
+
+https://developer.github.com/v3/gists/#list-all-public-gists
+
+Usage:
+
+    public_gists
+
+Keyword arguments
+
+* `_follow_next`
+
+  Automatically look for a 'Links' header and follow any 'next' URLs.
+* `_follow_next_limit`
+
+  Maximum number of 'next' URLs to follow before stopping.
+* `_filter='.[] | "\(.id)\t\(.description)"'`
+
+  A jq filter to apply to the return data.
+
+### gist
+
+Get a single gist
+
+https://developer.github.com/v3/gists/#get-a-single-gist
+
+Usage:
+
+    get_gist
+
+Positional arguments
+
+* `gist_id="$1"`
+
+  ID of gist to fetch.
+
+Keyword arguments
+
+* `_filter='.files | keys | join(", ")'`
+
+  A jq filter to apply to the return data.
+
 ### add_collaborator
 
 Add a collaborator to a repository
 
 Usage:
-      add_collaborator someuser/somerepo collaboratoruser permission
+
+    add_collaborator someuser/somerepo collaboratoruser permission
 
 Positional arguments
 
@@ -777,7 +884,8 @@ Keyword arguments
 Delete a collaborator to a repository
 
 Usage:
-      delete_collaborator someuser/somerepo collaboratoruser permission
+
+    delete_collaborator someuser/somerepo collaboratoruser permission
 
 Positional arguments
 
@@ -825,7 +933,7 @@ POST data may also be passed as keyword arguments:
 
 ### delete_repo
 
-Create a repository for a user or organization
+Delete a repository for a user or organization
 
 Usage:
 
@@ -845,7 +953,7 @@ Positional arguments
 
 ### fork_repo
 
-Fork a repository from a user or organization to own account
+Fork a repository from a user or organization to own account or organization
 
 Usage:
 
@@ -860,15 +968,22 @@ Positional arguments
 
   Name of the existing repo
 
+
 Keyword arguments
 
 * `_filter='"\(.clone_url)\t\(.ssh_url)"'`
 
   A jq filter to apply to the return data.
 
+POST data may also be passed as keyword arguments:
+
+* `organization` (The organization to clone into; default: your personal account)
+
 ### list_releases
 
 List releases for a repository
+
+https://developer.github.com/v3/repos/releases/#list-releases-for-a-repository
 
 Usage:
 
@@ -885,13 +1000,15 @@ Positional arguments
 
 Keyword arguments
 
-* `_filter='.[] | "\(.name)\t\(.id)\t\(.html_url)"'`
+* `_filter='.[] | "\(.name)\t\(.tag_name)\t\(.id)\t\(.html_url)"'`
 
   A jq filter to apply to the return data.
 
 ### release
 
 Get a release
+
+https://developer.github.com/v3/repos/releases/#get-a-single-release
 
 Usage:
 
@@ -918,6 +1035,8 @@ Keyword arguments
 ### create_release
 
 Create a release
+
+https://developer.github.com/v3/repos/releases/#create-a-release
 
 Usage:
 
@@ -954,6 +1073,8 @@ POST data may also be passed as keyword arguments:
 
 Delete a release
 
+https://developer.github.com/v3/repos/releases/#delete-a-release
+
 Usage:
 
     delete_release org repo 1087855
@@ -976,9 +1097,30 @@ Positional arguments
 
 List release assets
 
+https://developer.github.com/v3/repos/releases/#list-assets-for-a-release
+
 Usage:
 
     release_assets user repo 1087855
+
+Example of downloading release assets:
+
+    ok.sh release_assets <user> <repo> <release_id> \
+            _filter='.[] | .browser_download_url' \
+        | xargs -L1 curl -L -O
+
+Example of the multi-step process for grabbing the release ID for
+a specific version, then grabbing the release asset IDs, and then
+downloading all the release assets (whew!):
+
+    username='myuser'
+    repo='myrepo'
+    release_tag='v1.2.3'
+    ok.sh list_releases "$myuser" "$myrepo" \
+        | awk -F'\t' -v tag="$release_tag" '$2 == tag { print $3 }' \
+        | xargs -I{} ./ok.sh release_assets "$myuser" "$myrepo" {} \
+            _filter='.[] | .browser_download_url' \
+        | xargs -L1 curl -n -L -O
 
 Positional arguments
 
@@ -1002,30 +1144,45 @@ Keyword arguments
 
 Upload a release asset
 
-Note, this command requires `jq` to find the release `upload_url`.
+https://developer.github.com/v3/repos/releases/#upload-a-release-asset
 
 Usage:
 
-    upload_asset username reponame 1087938 \
-        foo.tar application/x-tar < foo.tar
+    upload_asset https://<upload-url> /path/to/file.zip
 
-* (stdin)
-  The contents of the file to upload.
+The upload URL can be gotten from `release()`. There are multiple steps
+required to upload a file: get the release ID, get the upload URL, parse
+the upload URL, then finally upload the file. For example:
+
+```sh
+USER="someuser"
+REPO="somerepo"
+TAG="1.2.3"
+FILE_NAME="foo.zip"
+FILE_PATH="/path/to/foo.zip"
+
+# Create a release then upload a file:
+ok.sh create_release "$USER" "$REPO" "$TAG" _filter='.upload_url' \
+    | sed 's/{.*$/?name='"$FILE_NAME"'/' \
+    | xargs -I@ ok.sh upload_asset @ "$FILE_PATH"
+
+# Find a release by tag then upload a file:
+ok.sh list_releases "$USER" "$REPO" \
+    | awk -v "tag=$TAG" -F'\t' '$2 == tag { print $3 }' \
+    | xargs -I@ ok.sh release "$USER" "$REPO" @ _filter='.upload_url' \
+    | sed 's/{.*$/?name='"$FILE_NAME"'/' \
+    | xargs -I@ ok.sh upload_asset @ "$FILE_PATH"
+```
 
 Positional arguments
 
-* `owner="$1"`
+* `upload_url="$1"`
 
-  A GitHub user or organization.
-* `repo="$2"`
+The _parsed_ upload_url returned from GitHub.
 
-  A GitHub repository.
-* `release_id="$3"`
+* `file_path="$2"`
 
-  The unique ID of the release; see list_releases.
-* `name="$4"`
-
-  The file name of the asset.
+  A path to the file that should be uploaded.
 
 Keyword arguments
 
@@ -1033,14 +1190,16 @@ Keyword arguments
 
   A jq filter to apply to the return data.
 
+Also any other keyword arguments accepted by `_post()`.
+
 ### list_milestones
 
 List milestones for a repository
 
 Usage:
 
-      list_milestones someuser/somerepo
-      list_milestones someuser/somerepo state=closed
+    list_milestones someuser/somerepo
+    list_milestones someuser/somerepo state=closed
 
 Positional arguments
 
@@ -1073,12 +1232,12 @@ Create a milestone for a repository
 
 Usage:
 
-      create_milestone someuser/somerepo MyMilestone
+    create_milestone someuser/somerepo MyMilestone
 
-      create_milestone someuser/somerepo MyMilestone \
-          due_on=2015-06-16T16:54:00Z \
-          description='Long description here
-      that spans multiple lines.'
+    create_milestone someuser/somerepo MyMilestone \
+        due_on=2015-06-16T16:54:00Z \
+        description='Long description here
+    that spans multiple lines.'
 
 Positional arguments
 
@@ -1106,7 +1265,8 @@ Milestone options may also be passed as keyword arguments:
 Add a comment to an issue
 
 Usage:
-  add_comment someuser/somerepo 123 'This is a comment'
+
+    add_comment someuser/somerepo 123 'This is a comment'
 
 Positional arguments
 
@@ -1131,7 +1291,8 @@ Keyword arguments
 Add a comment to a commit
 
 Usage:
-  add_commit_comment someuser/somerepo 123 'This is a comment'
+
+    add_commit_comment someuser/somerepo 123 'This is a comment'
 
 Positional arguments
 
@@ -1156,7 +1317,8 @@ Keyword arguments
 Close an issue
 
 Usage:
-  close_issue someuser/somerepo 123
+
+    close_issue someuser/somerepo 123
 
 Positional arguments
 
@@ -1185,9 +1347,9 @@ List issues for the authenticated user or repository
 
 Usage:
 
-      list_issues
-      list_issues someuser/somerepo
-      list_issues <any of the above> state=closed labels=foo,bar
+    list_issues
+    list_issues someuser/somerepo
+    list_issues <any of the above> state=closed labels=foo,bar
 
 Positional arguments
 
@@ -1224,8 +1386,8 @@ List all issues across owned and member repositories for the authenticated user
 
 Usage:
 
-      user_issues
-      user_issues since=2015-60-11T00:09:00Z
+    user_issues
+    user_issues since=2015-60-11T00:09:00Z
 
 Keyword arguments
 
@@ -1249,13 +1411,48 @@ GitHub querystring arguments may also be passed as keyword arguments:
 * `sort`
 * `state`
 
+### create_issue
+
+Create an issue
+
+Usage:
+
+    create_issue owner repo 'Issue title' body='Add multiline body
+    content here' labels="$(./ok.sh _format_json -a foo bar)"
+
+Positional arguments
+
+* `owner="$1"`
+
+  A GitHub repository.
+* `repo="$2"`
+
+  A GitHub repository.
+* `title="$3"`
+
+  A GitHub repository.
+
+Keyword arguments
+
+* `_filter='"\(.id)\t\(.number)\t\(.html_url)"'`
+
+  A jq filter to apply to the return data.
+
+Additional issue fields may be passed as keyword arguments:
+
+* `body` (string)
+* `assignee` (string)
+* `milestone` (integer)
+* `labels` (array of strings)
+* `assignees` (array of strings)
+
 ### org_issues
 
 List all issues for a given organization for the authenticated user
 
 Usage:
 
-      org_issues someorg
+    org_issues someorg
 
 Positional arguments
 
@@ -1285,13 +1482,33 @@ GitHub querystring arguments may also be passed as keyword arguments:
 * `sort`
 * `state`
 
+### list_my_orgs
+
+List your organizations
+
+Usage:
+
+    list_my_orgs
+
+Keyword arguments
+
+* `_follow_next`
+
+  Automatically look for a 'Links' header and follow any 'next' URLs.
+* `_follow_next_limit`
+
+  Maximum number of 'next' URLs to follow before stopping.
+* `_filter='.[] | "\(.login)\t\(.id)"'`
+
+  A jq filter to apply to the return data.
+
 ### list_orgs
 
 List all organizations
 
 Usage:
 
-      list_orgs
+    list_orgs
 
 Keyword arguments
 
@@ -1311,7 +1528,7 @@ List available labels for a repository
 
 Usage:
 
-      labels someuser/somerepo
+    labels someuser/somerepo
 
 Positional arguments
 
@@ -1336,7 +1553,8 @@ Keyword arguments
 Add a label to a repository
 
 Usage:
-      add_label someuser/somerepo LabelName color
+
+    add_label someuser/somerepo LabelName color
 
 Positional arguments
 
@@ -1361,8 +1579,9 @@ Keyword arguments
 Update a label
 
 Usage:
-      update_label someuser/somerepo OldLabelName \
-          label=NewLabel color=newcolor
+
+    update_label someuser/somerepo OldLabelName \
+        label=NewLabel color=newcolor
 
 Positional arguments
 
@@ -1417,7 +1636,7 @@ Lists the pull requests for a repository
 
 Usage:
 
-      list_pulls user repo
+    list_pulls user repo
 
 Positional arguments
 
@@ -1446,9 +1665,9 @@ Create a pull request for a repository
 
 Usage:
 
-      create_pull_request someuser/somerepo title head base
+    create_pull_request someuser/somerepo title head base
 
-      create_pull_request someuser/somerepo title head base body='Description here.'
+    create_pull_request someuser/somerepo title head base body='Description here.'
 
 Positional arguments
 
@@ -1482,7 +1701,7 @@ Update a pull request for a repository
 
 Usage:
 
-      update_pull_request someuser/somerepo number title='New title' body='New body'
+    update_pull_request someuser/somerepo number title='New title' body='New body'
 
 Positional arguments
 
@@ -1506,4 +1725,56 @@ Pull request options may also be passed as keyword arguments:
 * `maintainer_can_modify`
 * `state` (either open or closed)
 * `title`
+
+### transfer_repo
+
+Transfer a repository to a user or organization
+
+Usage:
+
+    transfer_repo owner repo new_owner
+    transfer_repo owner repo new_owner team_ids='[ 12, 345 ]'
+
+Positional arguments
+
+* `owner="$1"`
+
+  Name of the current owner
+
+* `repo="$2"`
+
+  Name of the current repo
+
+* `new_owner="$3"`
+
+  Name of the new owner
+
+Keyword arguments
+
+* `_filter='"\(.name)"'`
+
+  A jq filter to apply to the return data.
+
+POST data may also be passed as keyword arguments:
+
+* `team_ids`
+
+### archive_repo
+
+Archive a repo
+
+Usage:
+
+    archive_repo owner/repo
+
+Positional arguments
+
+* `repo="$1"`
+
+  A GitHub repository.
+
+* `_filter='"\(.name)\t\(.html_url)"'`
+
+  A jq filter to apply to the return data.
+
 

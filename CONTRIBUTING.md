@@ -11,15 +11,27 @@ fairly modern systems (ten to fifteen years old), although concessions can be
 made for legacy or unusual systems if that does not burden the overall
 maintainability of the script.
 
+### Development Environment
+
+There are two ways to quickly create a consistent development environment.
+Although busybox is not completely POSIX compliant it's the closest out-of-box
+environment that I know of.
+
+- OS X (requires Docker): run `make docker` to drop you into an Alpine/busybox
+  shell with the local directory mounted as a volume.
+- Linux (requires busybox): run `make busybox` to create and populate
+  a directory of busybox symlinks and drop you into a shell with that path set.
+
+### POSIX Documentation
+
+The [POSIX documentation is available
+online](https://pubs.opengroup.org/onlinepubs/9699919799/). In addition you can
+download a local copy for offline viewing by running `make posixdocs`.
+
 ## Generate README
 
 The README file is a generated file from extracting comments in the main
-script. It should not be modified directly. See the Makefile for details but
-tl;dr execute:
-
-```
-make readme
-```
+script. It should not be modified directly. Run `make readme` to generate it.
 
 ## Code Structure
 
